@@ -4,10 +4,10 @@ import yaml
 # YAML
 def read_yaml(file_path):
     with open(file_path, 'r', encoding='utf-8') as file:
-        data = yaml.safe_load(file)  # 解析 YAML 文件
+        data = yaml.safe_load(file)  # 解析 YAML 檔案
     return data
 
-yaml_file = r"config\config.yaml"  # 替换 YAML 路径
+yaml_file = r"config\config.yaml"  # 替換 YAML 路徑
 yaml_data = read_yaml(yaml_file)
 
 log_level = yaml_data['logging']['level'].upper()
