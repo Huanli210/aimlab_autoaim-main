@@ -140,13 +140,46 @@ def debug_yolo(frame, closest_box_info, screen_center_x, screen_center_y, delay_
             cv2.putText(frame, confidence_text, (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 2)
 
     cv2.circle(frame, (screen_center_x, screen_center_y), 5, (0, 255, 0), -1)
-    delay_text = f"延遲: {delay_time:.2f} ms"
+    delay_text = f"delay: {delay_time:.2f} ms"
     cv2.putText(frame, delay_text, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
-    cv2.imshow("YOLO 偵測", frame)
+    
+    # 根據 debug_window_scale 縮放畫面
+    if config.debug_window_scale != 1.0:
+        height, width = frame.shape[:2]
+        new_width = int(width * config.debug_window_scale)
+        new_height = int(height * config.debug_window_scale)
+        scaled_frame = cv2.resize(frame, (new_width, new_height), interpolation=cv2.INTER_AREA)
+        cv2.imshow("YOLO detection", scaled_frame)
+    else:
+        cv2.imshow("YOLO detection", frame)
 
 # --- 滑鼠控制函式 (使用專案的 DLL) ---
 def move_mouse_by(delta_x, delta_y):
     config.driver_mouse_control.move_R(int(delta_x), int(delta_y))
+
+def click():
+    """執行滑鼠左鍵點擊。"""
+    # 假設 DLL 有一個名為 'mouse_click' 的函式，1 為按下，0 為釋放
+    config.driver_mouse_control.mouse_click(1)
+    time.sleep(0.01) # 模擬點擊延遲
+    config.driver_mouse_control.mouse_click(0)
+
+def handle_firing(closest_box_info, screen_center_x, screen_center_y):
+    """根據設定的開火模式決定是否開火。"""
+    if not config.enable_auto_fire or not closest_box_info:
+        return
+
+    target_x, target_y, target_w, target_h = closest_box_info.box
+
+    if config.fire_mode == 0: # 模式0: 準星在目標框內
+        if abs(target_x - screen_center_x) < target_w / 2 and \
+           abs(target_y - screen_center_y) < target_h / 2:
+            click()
+    
+    elif config.fire_mode == 1: # 模式1: 準星靠近目標中心
+        fire_radius = 10  # 可設定的開火半徑
+        if closest_box_info.distance < fire_radius:
+            click()
 
 def control_mouse_move(closest_box_info, screen_center_x, screen_center_y, pid_x, pid_y):
     """使用 PID 計算向量並將滑鼠移向目標。"""
@@ -172,6 +205,7 @@ def control_mouse_move(closest_box_info, screen_center_x, screen_center_y, pid_x
             move_mouse_by(final_move_x, final_move_y)
 
 # --- 多執行緒與主迴圈 ---
+
 def on_press(key):
     """pynput 監聽器，按下 ESC 鍵時停止程式。"""
     global running
@@ -237,8 +271,8 @@ def yolo_thread_func(model):
     last_target_box = None # 用於儲存最後一個目標框的變數
 
     if config.debug:
-        cv2.namedWindow("YOLO 偵測", cv2.WINDOW_NORMAL)
-        cv2.setWindowProperty("YOLO 偵測", cv2.WND_PROP_TOPMOST, 1)
+        cv2.namedWindow("YOLO detection", cv2.WINDOW_NORMAL)
+        cv2.setWindowProperty("YOLO detection", cv2.WND_PROP_TOPMOST, 1)
 
     while running:
         try:
@@ -281,9 +315,10 @@ def yolo_thread_func(model):
                 # 如果沒有找到目標，則重置 last_target_box
                 last_target_box = None
 
-            # 6. 使用全域座標控制滑鼠
+            # 6. 使用全域座標控制滑鼠與開火
             if config.control_mose and global_box_info:
                 control_mouse_move(global_box_info, aim_center_x, aim_center_y, pid_x, pid_y)
+                handle_firing(global_box_info, aim_center_x, aim_center_y)
             else:
                 # 如果沒有找到目標，則重置 PID 控制器
                 pid_x.reset()
