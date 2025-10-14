@@ -10,6 +10,28 @@ import threading
 from pynput import keyboard
 import dxcam
 
+# --- PID Controller ---
+class PID:
+    def __init__(self, Kp, Ki, Kd, set_point=0):
+        self.Kp = Kp
+        self.Ki = Ki
+        self.Kd = Kd
+        self.set_point = set_point
+        self.integral = 0
+        self.last_error = 0
+
+    def update(self, current_value):
+        error = self.set_point - current_value
+        self.integral += error
+        derivative = error - self.last_error
+        output = self.Kp * error + self.Ki * self.integral + self.Kd * derivative
+        self.last_error = error
+        return output
+
+    def reset(self):
+        self.integral = 0
+        self.last_error = 0
+
 # --- Helper Class ---
 class BoxInfo:
     def __init__(self, box, distance, confidence):
@@ -109,19 +131,28 @@ def click_mouse_lift():
     config.driver_mouse_control.click_Left_down()
     config.driver_mouse_control.click_Left_up()
 
-def control_mouse_move(closest_box_info, screen_center_x, screen_center_y):
-    """Calculates vector and moves the mouse towards the target."""
+def control_mouse_move(closest_box_info, screen_center_x, screen_center_y, pid_x, pid_y):
+    """Calculates vector and moves the mouse towards the target using PID."""
     if closest_box_info:
         target_x_frame = closest_box_info.box[0]
         target_y_frame = closest_box_info.box[1]
-        vector_x = target_x_frame - screen_center_x
-        vector_y = target_y_frame - screen_center_y
+        
+        # The error is the distance from the target to the screen center
+        error_x = target_x_frame - screen_center_x
+        error_y = target_y_frame - screen_center_y
+
+        # The PID controller's set_point is 0, as we want to minimize the error (distance)
+        # We pass the negative error to the PID update function because we want to move the mouse
+        # towards the target, effectively reducing the error.
+        move_x = pid_x.update(-error_x)
+        move_y = pid_y.update(-error_y)
 
         threshold = 2
         if closest_box_info.distance > threshold:
-            move_x = vector_x * config.mouse_smoothing
-            move_y = vector_y * config.mouse_smoothing
-            move_mouse_by(move_x, move_y)
+            # Apply an overall smoothing factor
+            final_move_x = move_x * config.pid_smooth
+            final_move_y = move_y * config.pid_smooth
+            move_mouse_by(final_move_x, final_move_y)
         else:
             click_mouse_lift()
             logging.info("Target within click threshold, clicking mouse.")
@@ -201,6 +232,10 @@ def yolo_thread_func(model):
     """
     global running
     logging.info("YOLO thread started.")
+
+    # Initialize PID controllers
+    pid_x = PID(Kp=config.pid_kp, Ki=config.pid_ki, Kd=config.pid_kd)
+    pid_y = PID(Kp=config.pid_kp, Ki=config.pid_ki, Kd=config.pid_kd)
     
     if config.debug:
         cv2.namedWindow("YOLO Detection", cv2.WINDOW_NORMAL)
@@ -243,8 +278,12 @@ def yolo_thread_func(model):
 
             # 6. Control mouse using global coordinates
             if config.control_mose and global_box_info:
-                control_mouse_move(global_box_info, aim_center_x, aim_center_y)
+                control_mouse_move(global_box_info, aim_center_x, aim_center_y, pid_x, pid_y)
                 should_fire(frame, config.fire_switch, aim_center_y, aim_center_x, config.fire_k, global_box_info)
+            else:
+                # Reset PID controllers if no target is found
+                pid_x.reset()
+                pid_y.reset()
             
             end_time = time.perf_counter()
             delay_time = (end_time - start_time) * 1000

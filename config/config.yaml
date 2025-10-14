@@ -9,6 +9,10 @@ settings:
   #yolo_model_path: "C:\\Users\\User\\Downloads\\Compressed\\Yolo_Aimlab-main\\Yolo_Aimlab-main\\detect\\train\\weights\\best.pt" # YOLOv5 model path
   yolo_model_path: "C:\\Users\\User\\yolov5\\runs\\train\\exp3\\weights\\best.pt" # YOLOv5 model path
   mouse_smoothing: 0.2 # 滑鼠平滑係數 (0.1-1.0)，值越小越平滑
+  pid_kp: 0.3 # PID Proportional gain
+  pid_ki: 0.0 # PID Integral gain
+  pid_kd: 0.1 # PID Derivative gain
+  pid_smooth: 0.8 # PID an overall smoothing factor for the output
 
 logging:
   level: "INFO"
