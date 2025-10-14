@@ -1,0 +1,18 @@
+settings:
+  WINDOW_TITLE: "aimlab_tb"
+  roi_width: 680
+  roi_height: 380
+  debug: true
+  control_mose: true
+  fire_switch: 1  # 0 是 边缘打击 ， 1 是中心打击
+  fire_k: 10
+  #yolo_model_path: "C:\\Users\\User\\Downloads\\Compressed\\Yolo_Aimlab-main\\Yolo_Aimlab-main\\detect\\train\\weights\\best.pt" # YOLOv5 model path
+  yolo_model_path: "C:\\Users\\User\\yolov5\\runs\\train\\exp3\\weights\\best.pt" # YOLOv5 model path
+  mouse_smoothing: 0.2 # 滑鼠平滑係數 (0.1-1.0)，值越小越平滑
+  confidence_threshold: 0 # 信心度閥值 (0.0-1.0)，只處理高於此值的目標
+
+logging:
+  level: "INFO"
+
+device:
+  path: "devices/MouseControl.dll"
