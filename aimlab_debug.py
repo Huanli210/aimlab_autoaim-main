@@ -148,10 +148,6 @@ def debug_yolo(frame, closest_box_info, screen_center_x, screen_center_y, delay_
 def move_mouse_by(delta_x, delta_y):
     config.driver_mouse_control.move_R(int(delta_x), int(delta_y))
 
-def click_mouse_lift():
-    config.driver_mouse_control.click_Left_down()
-    config.driver_mouse_control.click_Left_up()
-
 def control_mouse_move(closest_box_info, screen_center_x, screen_center_y, pid_x, pid_y):
     """使用 PID 計算向量並將滑鼠移向目標。"""
     if closest_box_info:
@@ -174,24 +170,6 @@ def control_mouse_move(closest_box_info, screen_center_x, screen_center_y, pid_x
             final_move_x = move_x * config.pid_smooth
             final_move_y = move_y * config.pid_smooth
             move_mouse_by(final_move_x, final_move_y)
-        else:
-            click_mouse_lift()
-            logging.info("目標在點擊閾值內，點擊滑鼠。")
-
-def should_fire(img, fire_switch, screen_center_y, screen_center_x, fire_k, closest_box_info):
-    """判斷是否滿足開火條件。"""
-    if fire_switch == 0: # 基於邊緣的開火
-        if closest_box_info and closest_box_info.distance < fire_k:
-            logging.info("偵測到目標在開火範圍內，進行開火。")
-            click_mouse_lift()
-            return True
-    elif fire_switch == 1: # 基於中心像素的開火
-        center_pixel_value = img[screen_center_y, screen_center_x]
-        if np.array_equal(center_pixel_value, [255, 255, 255]):
-            logging.info("中心點滿足開火條件。")
-            click_mouse_lift()
-            return True
-    return False
 
 # --- 多執行緒與主迴圈 ---
 def on_press(key):
@@ -306,7 +284,6 @@ def yolo_thread_func(model):
             # 6. 使用全域座標控制滑鼠
             if config.control_mose and global_box_info:
                 control_mouse_move(global_box_info, aim_center_x, aim_center_y, pid_x, pid_y)
-                should_fire(frame, config.fire_switch, aim_center_y, aim_center_x, config.fire_k, global_box_info)
             else:
                 # 如果沒有找到目標，則重置 PID 控制器
                 pid_x.reset()
