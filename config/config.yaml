@@ -1,31 +1,23 @@
-settings:
-  WINDOW_TITLE: "aimlab_tb"
-  roi_width: 680
-  roi_height: 680
-  debug: true
-  debug_window_scale: 0.25 # 除錯視窗縮放比例
-  control_mose: true
-
-  enable_auto_fire: true # 是否啟用自動開火 (true/false)
-  fire_mode: 0           # 開火模式 (0: 當準星進入目標偵測框內, 1: 當準星靠近目標中心一定範圍內)
-
-  #yolo_model_path: "C:\\Users\\User\\Downloads\\Compressed\\Yolo_Aimlab-main\\Yolo_Aimlab-main\\detect\\train\\weights\\best.pt" # YOLOv5 模型路徑
-  yolo_model_path: "C:\\Users\\User\\yolov5\\runs\\train\\exp3\\weights\\best.pt" # YOLOv5 模型路徑
-  mouse_smoothing: 0.1 # 滑鼠移動平滑係數 (0.1-1.0)，值越小移動越平滑
-  pid_kp: 0.45 # PID 比例增益
-  pid_ki: 0.05 # PID 積分增益 (提高至 0.05 以確保準心到達目標中心)
-  pid_kd: 0.1 # PID 微分增益
-  pid_smooth: 0.7 # PID 輸出整體平滑因子
-  target_stickiness: 0.1 # (0-1.0) 平衡黏滯性與流暢度
-
-logging:
-  level: "INFO"
-
 device:
-  path: "devices/MouseControl.dll"
-
-# 按鍵設置
+  path: devices/MouseControl.dll
 hotkeys:
-  exit_key: "end"          # 退出程式 (End 鍵)
-  pause_key: "p"           # 暫停/恢復檢測 (P 鍵)
-  preview_exit_key: "q"    # 預覽窗口退出鍵
+  exit_key: end
+  pause_key: p
+logging:
+  level: INFO
+settings:
+  WINDOW_TITLE: aimlab_tb
+  control_mose: true
+  debug: true
+  debug_window_scale: 0.25
+  enable_auto_fire: true
+  fire_mode: 0
+  mouse_smoothing: 0.1
+  pid_kd: 0.1
+  pid_ki: 0.05
+  pid_kp: 0.1
+  pid_smooth: 0.7
+  roi_height: 680
+  roi_width: 680
+  target_stickiness: 0.1
+  yolo_model_path: weights/weights/best.pt

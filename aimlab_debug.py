@@ -85,9 +85,12 @@ class TrackingState:
         return min(elapsed / 1.0, 1.0)  # 1 秒內達到最大信心度
 
 # --- 全域變數 ---
-running = True
+running = False
 frame_queue = queue.Queue(maxsize=2)
 detection_paused = False  # 檢測暫停標誌
+preview_enabled = False  # 預覽視窗顯示標誌
+pid_x = None
+pid_y = None
 
 # --- 核心函式 (保留與調整) ---
 def load_yolo_model(model_path):
@@ -198,6 +201,23 @@ def detector_yolo(frame, model, screen_center_x, screen_center_y, tracking_state
 
 def debug_yolo(frame, closest_box_info, screen_center_x, screen_center_y, delay_time, frame_count):
     """顯示帶有偵測資訊的除錯視窗。使用幀計數控制更新頻率。"""
+    # 檢查預覽是否開啟
+    if not preview_enabled:
+        return
+    
+    # 延遲建立視窗（只在預覽開啟時）
+    try:
+        existing_window = cv2.getWindowProperty("YOLO detection", cv2.WND_PROP_VISIBLE)
+        if existing_window < 0:  # 視窗不存在
+            cv2.namedWindow("YOLO detection", cv2.WINDOW_NORMAL)
+            cv2.setWindowProperty("YOLO detection", cv2.WND_PROP_TOPMOST, 1)
+    except Exception:
+        try:
+            cv2.namedWindow("YOLO detection", cv2.WINDOW_NORMAL)
+            cv2.setWindowProperty("YOLO detection", cv2.WND_PROP_TOPMOST, 1)
+        except Exception:
+            pass
+    
     # 每 3 幀才更新一次視窗，以提高流暢度
     if frame_count % 3 != 0:
         return
@@ -352,7 +372,7 @@ def yolo_thread_func(model):
     此函式在獨立的執行緒中執行。
     持續追蹤模式：即使目標暫時丟失，也會繼續搜索。
     """
-    global running
+    global running, pid_x, pid_y
     logging.info("YOLO 執行緒已啟動 (持續追蹤模式)。")
 
     # 初始化 PID 控制器
@@ -362,10 +382,7 @@ def yolo_thread_func(model):
     # 初始化追蹤狀態 (20 幀以平衡連續性與切換)
     tracking_state = TrackingState(max_lost_frames=20)
     frame_count = 0
-
-    if config.debug:
-        cv2.namedWindow("YOLO detection", cv2.WINDOW_NORMAL)
-        cv2.setWindowProperty("YOLO detection", cv2.WND_PROP_TOPMOST, 1)
+    window_created = False  # 追蹤視窗是否已建立
 
     while running:
         try:
@@ -471,9 +488,7 @@ def yolo_thread_func(model):
                 cv2.putText(frame, status_text, (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.7, status_color, 2)
                 
                 debug_yolo(frame, global_box_info, aim_center_x, aim_center_y, delay_time, frame_count)
-                if cv2.waitKey(1) & 0xFF == ord(config.preview_exit_key):
-                    running = False
-                    break
+                cv2.waitKey(1)
                     
         except queue.Empty:
             continue
