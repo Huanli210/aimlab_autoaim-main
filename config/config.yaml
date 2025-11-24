@@ -2,7 +2,7 @@ settings:
   WINDOW_TITLE: "aimlab_tb"
   roi_width: 680
   roi_height: 680
-  debug: true
+  debug: false
   debug_window_scale: 0.25 # 除錯視窗縮放比例
   control_mose: true
   enable_auto_fire: true # 是否啟用自動開火 (true/false)

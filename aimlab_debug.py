@@ -159,7 +159,7 @@ def move_mouse_by(delta_x, delta_y):
 
 def click():
     """執行滑鼠左鍵點擊。"""
-    # 假設 DLL 有一個名為 'mouse_click' 的函式，1 為按下，0 為釋放
+    # DLL 有一個名為 'mouse_click' 的函式，1 為按下，0 為釋放
     config.driver_mouse_control.mouse_click(1)
     time.sleep(0.01) # 模擬點擊延遲
     config.driver_mouse_control.mouse_click(0)
