@@ -19,10 +19,13 @@ class PID:
         self.set_point = set_point
         self.integral = 0
         self.last_error = 0
+        self.integral_max = 50  # 積分飽和限制
 
     def update(self, current_value):
         error = self.set_point - current_value
         self.integral += error
+        # 限制積分值以防止飽和
+        self.integral = max(-self.integral_max, min(self.integral_max, self.integral))
         derivative = error - self.last_error
         output = self.Kp * error + self.Ki * self.integral + self.Kd * derivative
         self.last_error = error
@@ -39,9 +42,52 @@ class BoxInfo:
         self.distance = distance
         self.confidence = confidence
 
+class TrackingState:
+    """管理目標追蹤狀態。"""
+    def __init__(self, max_lost_frames=30):
+        self.is_tracking = False
+        self.last_target_box = None
+        self.lost_frames = 0
+        self.max_lost_frames = max_lost_frames  # 最多丟失多少幀後才放棄追蹤
+        self.tracking_start_time = None
+        self.last_detection_time = None
+    
+    def update_detection(self, target_box):
+        """更新檢測結果。"""
+        self.last_target_box = target_box
+        self.is_tracking = True
+        self.lost_frames = 0
+        self.last_detection_time = time.time()
+        if self.tracking_start_time is None:
+            self.tracking_start_time = time.time()
+    
+    def update_no_detection(self):
+        """沒有檢測到目標時的更新。"""
+        self.lost_frames += 1
+        if self.lost_frames >= self.max_lost_frames:
+            self.is_tracking = False
+            self.last_target_box = None
+            self.tracking_start_time = None
+    
+    def reset(self):
+        """重置追蹤狀態。"""
+        self.is_tracking = False
+        self.last_target_box = None
+        self.lost_frames = 0
+        self.tracking_start_time = None
+        self.last_detection_time = None
+    
+    def get_tracking_confidence(self):
+        """取得追蹤信心度 (基於連續追蹤的時間)。"""
+        if self.tracking_start_time is None:
+            return 0.0
+        elapsed = time.time() - self.tracking_start_time
+        return min(elapsed / 1.0, 1.0)  # 1 秒內達到最大信心度
+
 # --- 全域變數 ---
 running = True
 frame_queue = queue.Queue(maxsize=2)
+detection_paused = False  # 檢測暫停標誌
 
 # --- 核心函式 (保留與調整) ---
 def load_yolo_model(model_path):
@@ -62,15 +108,27 @@ def load_yolo_model(model_path):
             logging.error(f"使用 ultralytics YOLO 介面載入模型失敗: {e2}")
             return None
 
-def detector_yolo(frame, model, screen_center_x, screen_center_y, last_target_box=None):
-    """偵測物件，並對最後鎖定的目標套用「黏滯性」以防止準心抖動。"""
+def detector_yolo(frame, model, screen_center_x, screen_center_y, tracking_state, search_radius=None):
+    """偵測物件，並對追蹤中的目標套用「黏滯性」以防止準心抖動。
+    
+    Args:
+        frame: 輸入影格
+        model: YOLO 模型
+        screen_center_x: 螢幕中心 X 座標
+        screen_center_y: 螢幕中心 Y 座標
+        tracking_state: 追蹤狀態對象
+        search_radius: 搜索半徑。若為 None，則使用整個畫面。
+    
+    Returns:
+        檢測到的目標資訊 (BoxInfo)，或 None
+    """
     results = model(frame)
     closest_box_info = None
     closest_distance = float('inf')
 
-    # 定義一個閾值，用於判斷目標是否與前一個目標「相同」
-    # 此處基於偵測框中心的距離。50 像素是一個初始參考值。
+    # 定義黏滯性閾值
     STICKY_THRESHOLD = 50 
+    frame_height, frame_width = frame.shape[:2]
 
     def process_predictions(predictions):
         nonlocal closest_box_info, closest_distance
@@ -85,12 +143,20 @@ def detector_yolo(frame, model, screen_center_x, screen_center_y, last_target_bo
 
             distance = ((center_x - screen_center_x) ** 2 + (center_y - screen_center_y) ** 2) ** 0.5
 
-            # 如果此目標與最後鎖定的目標很近，則套用黏滯係數
-            if last_target_box is not None:
-                last_center_x, last_center_y, _, _ = last_target_box
+            # 如果正在追蹤目標，則套用黏滯性
+            if tracking_state.is_tracking and tracking_state.last_target_box is not None:
+                last_center_x, last_center_y, _, _ = tracking_state.last_target_box
                 dist_to_last = ((center_x - last_center_x) ** 2 + (center_y - last_center_y) ** 2) ** 0.5
                 if dist_to_last < STICKY_THRESHOLD:
-                    distance *= config.target_stickiness
+                    # 根據追蹤信心度調整黏滯性強度
+                    confidence_factor = tracking_state.get_tracking_confidence()
+                    stickiness = config.target_stickiness * (1.0 - confidence_factor * 0.5)
+                    distance *= stickiness
+
+            # 檢查是否在搜索半徑內
+            if search_radius is not None:
+                if distance > search_radius:
+                    continue
 
             if distance < closest_distance:
                 closest_box_info = BoxInfo((center_x, center_y, width, height), distance, confidence)
@@ -99,9 +165,7 @@ def detector_yolo(frame, model, screen_center_x, screen_center_y, last_target_bo
     if hasattr(results, 'pandas'): # torch.hub 模型
         process_predictions(results.pandas().xyxy[0])
     else: # ultralytics 模型
-        # 這部分需要針對 ultralytics 的結果格式進行調整才能應用黏滯性
-        # 目前主要針對 pandas 格式實現了黏滯性。
-         for result in results:
+        for result in results:
             for box in result.boxes:
                 confidence = box.conf[0]
                 x1, y1, x2, y2 = box.xyxy[0]
@@ -114,11 +178,17 @@ def detector_yolo(frame, model, screen_center_x, screen_center_y, last_target_bo
 
                 distance = ((center_x - screen_center_x) ** 2 + (center_y - screen_center_y) ** 2) ** 0.5
 
-                if last_target_box is not None:
-                    last_center_x, last_center_y, _, _ = last_target_box
+                if tracking_state.is_tracking and tracking_state.last_target_box is not None:
+                    last_center_x, last_center_y, _, _ = tracking_state.last_target_box
                     dist_to_last = ((center_x - last_center_x) ** 2 + (center_y - last_center_y) ** 2) ** 0.5
                     if dist_to_last < STICKY_THRESHOLD:
-                        distance *= config.target_stickiness
+                        confidence_factor = tracking_state.get_tracking_confidence()
+                        stickiness = config.target_stickiness * (1.0 - confidence_factor * 0.5)
+                        distance *= stickiness
+
+                if search_radius is not None:
+                    if distance > search_radius:
+                        continue
 
                 if distance < closest_distance:
                     closest_box_info = BoxInfo((center_x, center_y, width, height), distance, confidence)
@@ -126,32 +196,27 @@ def detector_yolo(frame, model, screen_center_x, screen_center_y, last_target_bo
 
     return closest_box_info
 
-def debug_yolo(frame, closest_box_info, screen_center_x, screen_center_y, delay_time):
-    """顯示帶有偵測資訊的除錯視窗。"""
-    if closest_box_info:
-        x, y, w, h = closest_box_info.box
-        x1, y1 = int(x - w / 2), int(y - h / 2)
-        x2, y2 = int(x + w / 2), int(y + h / 2)
-        cv2.rectangle(frame, (x1, y1), (x2, y2), (255, 255, 255), 2)
-        cv2.circle(frame, (int(x), int(y)), 5, (0, 0, 255), -1)
-
-        if hasattr(closest_box_info, 'confidence') and closest_box_info.confidence is not None:
-            confidence_text = f"{closest_box_info.confidence:.2f}"
-            cv2.putText(frame, confidence_text, (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 2)
-
-    cv2.circle(frame, (screen_center_x, screen_center_y), 5, (0, 255, 0), -1)
-    delay_text = f"delay: {delay_time:.2f} ms"
-    cv2.putText(frame, delay_text, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+def debug_yolo(frame, closest_box_info, screen_center_x, screen_center_y, delay_time, frame_count):
+    """顯示帶有偵測資訊的除錯視窗。使用幀計數控制更新頻率。"""
+    # 每 3 幀才更新一次視窗，以提高流暢度
+    if frame_count % 3 != 0:
+        return
     
-    # 根據 debug_window_scale 縮放畫面
+    display_frame = frame.copy() if config.debug_window_scale != 1.0 else frame
+    
+    # 只繪製準星圓點，不繪製目標框和目標紅點
+    cv2.circle(display_frame, (screen_center_x, screen_center_y), 5, (0, 255, 0), -1)
+    delay_text = f"delay: {delay_time:.2f} ms"
+    cv2.putText(display_frame, delay_text, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+    
+    # 縮放畫面用於顯示
     if config.debug_window_scale != 1.0:
-        height, width = frame.shape[:2]
+        height, width = display_frame.shape[:2]
         new_width = int(width * config.debug_window_scale)
         new_height = int(height * config.debug_window_scale)
-        scaled_frame = cv2.resize(frame, (new_width, new_height), interpolation=cv2.INTER_AREA)
-        cv2.imshow("YOLO detection", scaled_frame)
-    else:
-        cv2.imshow("YOLO detection", frame)
+        display_frame = cv2.resize(display_frame, (new_width, new_height), interpolation=cv2.INTER_LINEAR)
+    
+    cv2.imshow("YOLO detection", display_frame)
 
 # --- 滑鼠控制函式 (使用專案的 DLL) ---
 def move_mouse_by(delta_x, delta_y):
@@ -191,13 +256,21 @@ def control_mouse_move(closest_box_info, screen_center_x, screen_center_y, pid_x
         error_x = target_x_frame - screen_center_x
         error_y = target_y_frame - screen_center_y
 
+        # 設定死區（Deadzone）：在這個範圍內不移動，以確保準心能精確停留
+        deadzone = 1.5
+        
+        if abs(error_x) < deadzone:
+            error_x = 0
+        if abs(error_y) < deadzone:
+            error_y = 0
+
         # PID 控制器的設定點為 0，因為我們希望將誤差（距離）最小化
         # 我們將負誤差傳遞給 PID 更新函式，因為我們希望滑鼠朝著目標移動
         # 從而有效地減少誤差。
         move_x = pid_x.update(-error_x)
         move_y = pid_y.update(-error_y)
 
-        threshold = 2
+        threshold = 1.5  # 降低閾值以提高精準度
         if closest_box_info.distance > threshold:
             # 套用整體平滑因子
             final_move_x = move_x * config.pid_smooth
@@ -207,12 +280,29 @@ def control_mouse_move(closest_box_info, screen_center_x, screen_center_y, pid_x
 # --- 多執行緒與主迴圈 ---
 
 def on_press(key):
-    """pynput 監聽器，按下 ESC 鍵時停止程式。"""
-    global running
-    if key == keyboard.Key.esc:
-        logging.warning("偵測到 ESC 鍵。正在關閉程式。")
-        running = False
-        return False
+    """pynput 監聽器，根據配置文件中的按鍵設置。"""
+    global running, detection_paused
+    try:
+        # 檢查退出鍵
+        if config.exit_key.lower() == "end":
+            if key == keyboard.Key.end:
+                logging.warning(f"偵測到 End 鍵。正在關閉程式。")
+                running = False
+                return False
+        elif config.exit_key.lower() == "esc":
+            if key == keyboard.Key.esc:
+                logging.warning(f"偵測到 ESC 鍵。正在關閉程式。")
+                running = False
+                return False
+        
+        # 檢查暫停鍵
+        if hasattr(key, 'char'):
+            if key.char and key.char.lower() == config.pause_key.lower():
+                detection_paused = not detection_paused
+                status = "已暫停" if detection_paused else "已恢復"
+                logging.info(f"檢測已{status}。")
+    except AttributeError:
+        pass
 
 def capture_thread_func():
     """使用 dxcam 擷取遊戲視窗並將影格放入佇列。
@@ -260,15 +350,18 @@ def capture_thread_func():
 def yolo_thread_func(model):
     """從佇列處理影格，在中央 ROI 上執行 YOLO 偵測，並控制滑鼠。
     此函式在獨立的執行緒中執行。
+    持續追蹤模式：即使目標暫時丟失，也會繼續搜索。
     """
     global running
-    logging.info("YOLO 執行緒已啟動。")
+    logging.info("YOLO 執行緒已啟動 (持續追蹤模式)。")
 
     # 初始化 PID 控制器
     pid_x = PID(Kp=config.pid_kp, Ki=config.pid_ki, Kd=config.pid_kd)
     pid_y = PID(Kp=config.pid_kp, Ki=config.pid_ki, Kd=config.pid_kd)
     
-    last_target_box = None # 用於儲存最後一個目標框的變數
+    # 初始化追蹤狀態 (20 幀以平衡連續性與切換)
+    tracking_state = TrackingState(max_lost_frames=20)
+    frame_count = 0
 
     if config.debug:
         cv2.namedWindow("YOLO detection", cv2.WINDOW_NORMAL)
@@ -278,6 +371,7 @@ def yolo_thread_func(model):
         try:
             start_time = time.perf_counter()
             frame = frame_queue.get(timeout=1)
+            frame_count += 1
             
             # 1. 定義瞄準中心 (全畫面的中心)
             aim_center_x = frame.shape[1] // 2
@@ -292,10 +386,23 @@ def yolo_thread_func(model):
             # 3. 將影格裁剪至 ROI
             detection_frame = frame[roi_top:roi_bottom, roi_left:roi_right]
 
-            # 4. 在裁剪後的影格中進行偵測，並套用黏滯性
+            # 4. 進行偵測 (如果未暫停)
             detection_center_x = config.roi_width // 2
             detection_center_y = config.roi_height // 2
-            local_box_info = detector_yolo(detection_frame, model, detection_center_x, detection_center_y, last_target_box)
+            
+            if detection_paused:
+                # 檢測暫停：跳過 YOLO 偵測
+                local_box_info = None
+            else:
+                # 正常進行偵測
+                local_box_info = detector_yolo(
+                    detection_frame, 
+                    model, 
+                    detection_center_x, 
+                    detection_center_y, 
+                    tracking_state,
+                    search_radius=None
+                )
             
             global_box_info = None
             if local_box_info:
@@ -309,18 +416,38 @@ def yolo_thread_func(model):
                 global_distance = ((global_box_coords[0] - aim_center_x) ** 2 + (global_box_coords[1] - aim_center_y) ** 2) ** 0.5
                 global_box_info = BoxInfo(global_box_coords, global_distance, local_box_info.confidence)
                 
-                # 使用找到的目標的局部座標更新 last_target_box
-                last_target_box = local_box_info.box
+                # 更新追蹤狀態
+                tracking_state.update_detection(local_box_info.box)
+                logging.debug(f"目標已檢測到，距離: {global_distance:.2f}px，追蹤幀數: {tracking_state.lost_frames}")
             else:
-                # 如果沒有找到目標，則重置 last_target_box
-                last_target_box = None
+                # 沒有找到新目標
+                if tracking_state.is_tracking:
+                    # 追蹤中但暫時丟失：保持最後已知位置進行預測移動
+                    tracking_state.update_no_detection()
+                    if tracking_state.last_target_box:
+                        # 使用最後已知位置
+                        last_box = tracking_state.last_target_box
+                        global_box_coords = (
+                            last_box[0] + roi_left,
+                            last_box[1] + roi_top,
+                            last_box[2],
+                            last_box[3]
+                        )
+                        global_distance = ((global_box_coords[0] - aim_center_x) ** 2 + (global_box_coords[1] - aim_center_y) ** 2) ** 0.5
+                        global_box_info = BoxInfo(global_box_coords, global_distance, 0.5)  # 信心度降低
+                        logging.debug(f"目標丟失，使用預測位置。丟失幀數: {tracking_state.lost_frames}/{tracking_state.max_lost_frames}")
+                else:
+                    # 未追蹤狀態下沒有找到目標
+                    pass
 
             # 6. 使用全域座標控制滑鼠與開火
             if config.control_mose and global_box_info:
                 control_mouse_move(global_box_info, aim_center_x, aim_center_y, pid_x, pid_y)
-                handle_firing(global_box_info, aim_center_x, aim_center_y)
+                # 只在有高信心度的檢測時才開火
+                if local_box_info:  # 只有實際偵測時才開火
+                    handle_firing(global_box_info, aim_center_x, aim_center_y)
             else:
-                # 如果沒有找到目標，則重置 PID 控制器
+                # 沒有目標時重置 PID 控制器
                 pid_x.reset()
                 pid_y.reset()
             
@@ -330,8 +457,21 @@ def yolo_thread_func(model):
             # 7. 在完整畫面上顯示除錯資訊
             if config.debug:
                 cv2.rectangle(frame, (roi_left, roi_top), (roi_right, roi_bottom), (0, 255, 255), 2) # 黃色 ROI 框
-                debug_yolo(frame, global_box_info, aim_center_x, aim_center_y, delay_time)
-                if cv2.waitKey(1) & 0xFF == ord('q'):
+                
+                # 顯示追蹤狀態
+                if detection_paused:
+                    status_text = "PAUSED"
+                    status_color = (0, 0, 255)  # 紅色表示暫停
+                elif tracking_state.is_tracking:
+                    status_text = f"TRACKING (lost: {tracking_state.lost_frames}/{tracking_state.max_lost_frames})"
+                    status_color = (0, 255, 0)
+                else:
+                    status_text = "IDLE"
+                    status_color = (0, 165, 255)
+                cv2.putText(frame, status_text, (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.7, status_color, 2)
+                
+                debug_yolo(frame, global_box_info, aim_center_x, aim_center_y, delay_time, frame_count)
+                if cv2.waitKey(1) & 0xFF == ord(config.preview_exit_key):
                     running = False
                     break
                     

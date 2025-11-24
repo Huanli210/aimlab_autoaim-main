@@ -29,3 +29,8 @@ pid_ki = yaml_data['settings']['pid_ki']
 pid_kd = yaml_data['settings']['pid_kd']
 pid_smooth = yaml_data['settings']['pid_smooth']
 target_stickiness = yaml_data['settings']['target_stickiness']
+
+# 按鍵設置
+exit_key = yaml_data['hotkeys']['exit_key']
+pause_key = yaml_data['hotkeys']['pause_key']
+preview_exit_key = yaml_data['hotkeys']['preview_exit_key']
